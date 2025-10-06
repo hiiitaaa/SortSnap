@@ -189,4 +189,5 @@ git push
 ---
 
 **作成日**: 2025-10-06
-**リポジトリ**: https://github.com/YOUR_USERNAME/SortSnap（作成後にURLを更新）
+**リポジトリ**: https://github.com/hiiitaaa/SortSnap
+**ステータス**: ✅ プッシュ済み
