@@ -106,6 +106,22 @@ class PreviewDialog(QDialog):
 
         control_layout.addStretch()
 
+        # 閉じるボタン
+        close_btn = QPushButton("閉じる (Esc)")
+        close_btn.clicked.connect(self.close)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1976D2;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2196F3;
+            }
+        """)
+        control_layout.addWidget(close_btn)
+
+        control_layout.addStretch()
+
         self.next_btn = QPushButton("次へ →")
         self.next_btn.clicked.connect(self.next_image)
         control_layout.addWidget(self.next_btn)

@@ -1,6 +1,5 @@
 """画像操作コントローラー"""
 import os
-import glob
 from pathlib import Path
 from src.models.image_model import ImageModel
 from src.models.history_model import HistoryModel
@@ -24,25 +23,38 @@ class ImageController:
 
         Returns:
             画像モデルのリスト
+
+        Raises:
+            FileNotFoundError: フォルダが存在しない場合
+            NotADirectoryError: 指定されたパスがディレクトリでない場合
+            PermissionError: フォルダへのアクセス権限がない場合
         """
         self.images.clear()
         self.history.clear()
         self.original_order.clear()
 
+        folder = Path(folder_path)
+
+        # フォルダの存在確認
+        if not folder.exists():
+            raise FileNotFoundError(f"フォルダが見つかりません: {folder_path}")
+
+        # ディレクトリ確認
+        if not folder.is_dir():
+            raise NotADirectoryError(f"指定されたパスはフォルダではありません: {folder_path}")
+
         try:
-            folder = Path(folder_path)
-            if not folder.exists() or not folder.is_dir():
-                return []
-
-            # 対応形式の画像ファイルを検索
+            # glob使用時は角括弧などをエスケープする必要がある
+            # より確実な方法として、iterdir()で全ファイルを取得してフィルタリング
             image_files = []
-            for ext in SUPPORTED_FORMATS:
-                image_files.extend(glob.glob(str(folder / f"*{ext}")))
-                # 大文字版も検索
-                image_files.extend(glob.glob(str(folder / f"*{ext.upper()}")))
+            for file_path in folder.iterdir():
+                if file_path.is_file():
+                    ext = file_path.suffix.lower()
+                    if ext in SUPPORTED_FORMATS:
+                        image_files.append(str(file_path))
 
-            # 重複を削除してソート
-            image_files = sorted(list(set(image_files)))
+            # ソート
+            image_files = sorted(image_files)
 
             # ImageModelを作成
             for i, file_path in enumerate(image_files):
@@ -58,9 +70,8 @@ class ImageController:
 
             return self.images
 
-        except Exception as e:
-            print(f"フォルダ読み込みエラー: {e}")
-            return []
+        except PermissionError as e:
+            raise PermissionError(f"フォルダへのアクセス権限がありません: {folder_path}") from e
 
     def load_from_files(self, file_paths: list[str]) -> list[ImageModel]:
         """

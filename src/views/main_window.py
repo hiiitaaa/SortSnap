@@ -380,13 +380,50 @@ class MainWindow(QMainWindow):
     def load_folder(self, folder_path: str):
         """フォルダを読み込む（内部メソッド）"""
         self.logger.info(f"フォルダ読み込み開始: {folder_path}")
-        images = self.image_controller.load_from_folder(folder_path)
+
+        try:
+            images = self.image_controller.load_from_folder(folder_path)
+        except FileNotFoundError as e:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"フォルダが見つかりません。\n\n{folder_path}"
+            )
+            self.logger.error(f"フォルダが見つかりません: {folder_path}")
+            return
+        except NotADirectoryError as e:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"指定されたパスはフォルダではありません。\n\n{folder_path}"
+            )
+            self.logger.error(f"パスはフォルダではありません: {folder_path}")
+            return
+        except PermissionError as e:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"フォルダへのアクセス権限がありません。\n\n{folder_path}"
+            )
+            self.logger.error(f"アクセス権限なし: {folder_path}")
+            return
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"フォルダの読み込み中にエラーが発生しました。\n\n{str(e)}"
+            )
+            self.logger.error(f"フォルダ読み込みエラー: {folder_path}, {e}")
+            return
 
         if not images:
+            from src.utils.constants import SUPPORTED_FORMATS
             QMessageBox.warning(
                 self,
                 "警告",
-                "対応する画像ファイルが見つかりませんでした。"
+                f"対応する画像ファイルが見つかりませんでした。\n\n"
+                f"フォルダ: {folder_path}\n"
+                f"対応形式: {', '.join(SUPPORTED_FORMATS)}"
             )
             self.logger.warning(f"対応画像なし: {folder_path}")
             return

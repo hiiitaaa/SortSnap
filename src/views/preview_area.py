@@ -3,8 +3,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
     QGridLayout, QLabel, QPushButton, QApplication
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QPoint, QMimeData
-from PyQt6.QtGui import QPixmap, QDrag, QPainter, QColor
+from PyQt6.QtCore import pyqtSignal, Qt, QPoint, QMimeData, QTimer, QRect, QSize
+from PyQt6.QtGui import QPixmap, QDrag, QPainter, QColor, QPen, QBrush, QFont
 from src.models.image_model import ImageModel
 from src.utils.animation import AnimationPlayer
 
@@ -119,6 +119,8 @@ class PreviewArea(QWidget):
             # サムネイルウィジェット作成
             thumbnail_widget = ThumbnailWidget(image, i, self)
             thumbnail_widget.clicked.connect(self._on_thumbnail_clicked)
+            thumbnail_widget.double_clicked.connect(self._on_thumbnail_double_clicked)
+            thumbnail_widget.preview_requested.connect(self._on_preview_requested)
             thumbnail_widget.drag_started.connect(self._on_drag_started)
             thumbnail_widget.drop_received.connect(self._on_drop_received)
 
@@ -185,7 +187,7 @@ class PreviewArea(QWidget):
         self.update_thumbnail_size(DEFAULT_THUMBNAIL_SIZE)
 
     def _on_thumbnail_clicked(self, index: int, modifiers):
-        """サムネイルクリック時"""
+        """サムネイルクリック時（シングルクリック）"""
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             # Ctrl+クリック: トグル選択
             if index in self.selected_indices:
@@ -205,17 +207,25 @@ class PreviewArea(QWidget):
                 self.last_selected_index = index
 
         else:
-            # 通常クリック: 単一選択
+            # 通常クリック: 単一選択のみ（拡大表示はダブルクリックまたは虫眼鏡で）
             self.selected_indices = [index]
             self.last_selected_index = index
-            # ダブルクリックで拡大表示
-            self.image_clicked.emit(index)
 
         # 選択状態を更新
         for widget in self.thumbnail_widgets:
             widget.set_selected(widget.index in self.selected_indices)
 
         self.selection_changed.emit(self.selected_indices)
+
+    def _on_thumbnail_double_clicked(self, index: int):
+        """サムネイルダブルクリック時"""
+        # 拡大表示
+        self.image_clicked.emit(index)
+
+    def _on_preview_requested(self, index: int):
+        """虫眼鏡アイコンクリック時"""
+        # 拡大表示
+        self.image_clicked.emit(index)
 
     def _on_drag_started(self, index: int):
         """ドラッグ開始時"""
@@ -259,6 +269,8 @@ class ThumbnailWidget(QWidget):
     """ドラッグ可能なサムネイルウィジェット"""
 
     clicked = pyqtSignal(int, Qt.KeyboardModifier)
+    double_clicked = pyqtSignal(int)  # ダブルクリックシグナル
+    preview_requested = pyqtSignal(int)  # 虫眼鏡クリックシグナル
     drag_started = pyqtSignal(int)
     drop_received = pyqtSignal(int, int)  # (from_index, to_index)
 
@@ -269,18 +281,60 @@ class ThumbnailWidget(QWidget):
         self.drag_start_position = None
         self.is_selected = False
 
+        # ダブルクリック検出用
+        self.click_timer = QTimer()
+        self.click_timer.setSingleShot(True)
+        self.click_timer.timeout.connect(self._handle_single_click)
+        self.pending_click_event = None
+
         # ドラッグ&ドロップを有効化
         self.setAcceptDrops(True)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(5, 5, 5, 5)
 
-        # サムネイル画像
-        self.thumbnail_label = QLabel()
+        # サムネイル画像エリア（虫眼鏡ボタンを含む）
+        self.thumbnail_container = QWidget()
+        self.thumbnail_container.setFixedSize(image.thumbnail.size() if image.thumbnail else QSize(200, 200))
+
+        # 画像ラベル
+        self.thumbnail_label = QLabel(self.thumbnail_container)
         if image.thumbnail:
             self.thumbnail_label.setPixmap(image.thumbnail)
+            self.thumbnail_label.setFixedSize(image.thumbnail.size())
         self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.thumbnail_label)
+        self.thumbnail_label.move(0, 0)
+
+        # 虫眼鏡ボタン（右下にオーバーレイ）
+        self.magnifier_btn = QPushButton("🔍", self.thumbnail_container)
+        self.magnifier_btn.setFixedSize(36, 36)
+        self.magnifier_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(100, 100, 100, 180);
+                color: white;
+                border: 2px solid rgba(255, 255, 255, 200);
+                border-radius: 18px;
+                font-size: 16px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: rgba(33, 150, 243, 220);
+                border: 2px solid white;
+            }
+        """)
+
+        # 虫眼鏡ボタンを右下に配置
+        btn_margin = 5
+        btn_x = self.thumbnail_container.width() - self.magnifier_btn.width() - btn_margin
+        btn_y = self.thumbnail_container.height() - self.magnifier_btn.height() - btn_margin
+        self.magnifier_btn.move(btn_x, btn_y)
+
+        # ホバー時にプレビュー表示
+        self.magnifier_btn.enterEvent = lambda e: self._on_magnifier_hover_enter()
+        self.magnifier_btn.leaveEvent = lambda e: self._on_magnifier_hover_leave()
+        self.magnifier_btn.clicked.connect(lambda: self.preview_requested.emit(self.index))
+
+        layout.addWidget(self.thumbnail_container, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # ファイル名表示
         name_label = QLabel(image.filename)
@@ -297,28 +351,54 @@ class ThumbnailWidget(QWidget):
 
         self.setLayout(layout)
 
+        # ホバータイマー（ホバー時に拡大表示）
+        self.hover_timer = QTimer()
+        self.hover_timer.setSingleShot(True)
+        self.hover_timer.timeout.connect(lambda: self.preview_requested.emit(self.index))
+
         # デフォルトスタイル
         self.update_style()
+
+    def _on_magnifier_hover_enter(self):
+        """虫眼鏡ホバー開始"""
+        self.hover_timer.start(500)  # 500ms後にプレビュー表示
+
+    def _on_magnifier_hover_leave(self):
+        """虫眼鏡ホバー終了"""
+        self.hover_timer.stop()
 
     def update_style(self):
         """スタイルを更新"""
         if self.is_selected:
-            self.setStyleSheet("""
-                ThumbnailWidget {
-                    border: 3px solid #2196F3;
-                    border-radius: 4px;
-                    background-color: #E3F2FD;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                ThumbnailWidget {
-                    border: 2px solid transparent;
+            # 選択時：画像に太い青枠、背景も青系
+            self.thumbnail_label.setStyleSheet("""
+                QLabel {
+                    border: 5px solid #2196F3;
                     border-radius: 4px;
                     background-color: white;
                 }
+            """)
+            self.setStyleSheet("""
+                ThumbnailWidget {
+                    background-color: #E3F2FD;
+                    border-radius: 8px;
+                }
+            """)
+        else:
+            # 非選択時：画像に薄いグレー枠
+            self.thumbnail_label.setStyleSheet("""
+                QLabel {
+                    border: 2px solid #E0E0E0;
+                    border-radius: 2px;
+                    background-color: white;
+                }
+            """)
+            self.setStyleSheet("""
+                ThumbnailWidget {
+                    background-color: white;
+                }
                 ThumbnailWidget:hover {
-                    border: 2px solid #BBDEFB;
+                    background-color: #F5F5F5;
                 }
             """)
 
@@ -326,12 +406,6 @@ class ThumbnailWidget(QWidget):
         """選択状態を設定"""
         self.is_selected = selected
         self.update_style()
-
-    def mousePressEvent(self, event):
-        """マウス押下時"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.drag_start_position = event.pos()
-            self.clicked.emit(self.index, QApplication.keyboardModifiers())
 
     def mouseMoveEvent(self, event):
         """マウス移動時（ドラッグ）"""
@@ -343,6 +417,10 @@ class ThumbnailWidget(QWidget):
         # ドラッグ距離チェック
         if (event.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
             return
+
+        # ダブルクリック待機中ならキャンセル
+        if self.click_timer.isActive():
+            self.click_timer.stop()
 
         # ドラッグ開始
         self.drag_started.emit(self.index)
@@ -359,6 +437,29 @@ class ThumbnailWidget(QWidget):
             drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
 
         drag.exec(Qt.DropAction.MoveAction)
+
+    def mousePressEvent(self, event):
+        """マウス押下時"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_start_position = event.pos()
+
+            # ダブルクリック検出のため、シングルクリックを遅延処理
+            if self.click_timer.isActive():
+                # 既にタイマーが動いている = ダブルクリック
+                self.click_timer.stop()
+                self.double_clicked.emit(self.index)
+                self.pending_click_event = None
+            else:
+                # シングルクリックの可能性
+                self.pending_click_event = (self.index, QApplication.keyboardModifiers())
+                self.click_timer.start(QApplication.doubleClickInterval())
+
+    def _handle_single_click(self):
+        """シングルクリック処理（ダブルクリックでなかった場合）"""
+        if self.pending_click_event:
+            index, modifiers = self.pending_click_event
+            self.clicked.emit(index, modifiers)
+            self.pending_click_event = None
 
     def dragEnterEvent(self, event):
         """ドラッグ侵入時"""
