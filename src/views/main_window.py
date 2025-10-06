@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         self.settings_panel = SettingsPanel(self.config)
         self.settings_panel.mode_changed.connect(self._on_mode_changed)
         self.settings_panel.save_requested.connect(self._on_save_requested)
+        self.settings_panel.open_folder_requested.connect(self.open_folder)
         layout.addWidget(self.settings_panel, 1)
 
         central_widget.setLayout(layout)

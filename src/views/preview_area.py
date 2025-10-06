@@ -147,15 +147,17 @@ class PreviewArea(QWidget):
         """idleアニメーションを表示"""
         self.clear_grid()
 
-        if not self.animation_player:
-            self.animation_player = AnimationPlayer("idle", self.grid_widget)
-            self.animation_player.setFixedSize(300, 300)
-
-        self.animation_player.show()
-        self.animation_player.play()
-
-        # 中央配置
-        self.grid_layout.addWidget(self.animation_player, 0, 0, Qt.AlignmentFlag.AlignCenter)
+        # アニメーション一時無効化
+        placeholder = QLabel("画像をドラッグ&ドロップ\nまたは\nCtrl+O でフォルダを開く")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setStyleSheet("""
+            QLabel {
+                font-size: 16pt;
+                color: #999;
+                padding: 50px;
+            }
+        """)
+        self.grid_layout.addWidget(placeholder, 0, 0, Qt.AlignmentFlag.AlignCenter)
 
     def update_thumbnail_size(self, size: int):
         """サムネイルサイズを変更"""

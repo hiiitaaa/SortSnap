@@ -17,6 +17,7 @@ class SettingsPanel(QWidget):
     mode_changed = pyqtSignal(str)
     settings_changed = pyqtSignal(dict)
     save_requested = pyqtSignal()
+    open_folder_requested = pyqtSignal()
 
     def __init__(self, config: ConfigModel, parent=None):
         super().__init__(parent)
@@ -88,6 +89,26 @@ class SettingsPanel(QWidget):
         desc1.setStyleSheet("font-size: 9pt; color: #666; margin-left: 20px;")
         layout.addWidget(desc1)
 
+        # フォルダを開くボタン
+        self.open_folder_btn = QPushButton("📁 フォルダを開く (Ctrl+O)")
+        self.open_folder_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-weight: bold;
+                margin-left: 20px;
+                margin-top: 5px;
+                margin-bottom: 10px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        layout.addWidget(self.open_folder_btn)
+
         # 新規フォルダモード
         self.new_folder_mode_radio = QRadioButton("新規フォルダ作成モード")
         self.mode_group.addButton(self.new_folder_mode_radio, 1)
@@ -99,6 +120,7 @@ class SettingsPanel(QWidget):
 
         # シグナル接続
         self.mode_group.buttonClicked.connect(self._on_mode_changed)
+        self.open_folder_btn.clicked.connect(self._on_open_folder_clicked)
 
         widget.setLayout(layout)
         return widget
@@ -304,6 +326,10 @@ class SettingsPanel(QWidget):
     def _on_save_clicked(self):
         """保存ボタンクリック時"""
         self.save_requested.emit()
+
+    def _on_open_folder_clicked(self):
+        """フォルダを開くボタンクリック時"""
+        self.open_folder_requested.emit()
 
     def _update_sample_names(self):
         """サンプル名をリアルタイム更新"""
