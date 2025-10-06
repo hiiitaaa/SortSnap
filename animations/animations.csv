@@ -1,3 +1,3 @@
 animation_id,name,video_path,loop,description
-splash,スプラッシュ,animations/splash.mp4,false,起動時のアニメーション
+splash,スプラッシュ,animations/splash.mp4,true,起動時のアニメーション
 idle,待機中,animations/idle.mp4,true,画像未読み込み時のアニメーション
