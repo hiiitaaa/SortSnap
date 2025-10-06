@@ -53,7 +53,7 @@ class AnimationPlayer(QWidget):
                 print(f"CSVファイルが見つかりません: {csv_path}")
                 return False
 
-            with open(csv_path, 'r', encoding='utf-8') as f:
+            with open(csv_path, 'r', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     if row['animation_id'] == self.animation_id:
