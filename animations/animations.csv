@@ -1,0 +1,3 @@
+animation_id,name,frame_count,fps,loop,frame_prefix,description
+splash,スプラッシュ,30,30,false,splash_,起動時のアニメーション
+idle,待機中,60,24,true,idle_,画像未読み込み時のアニメーション
