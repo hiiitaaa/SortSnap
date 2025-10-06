@@ -14,7 +14,38 @@
 
 ## 開発履歴
 
-### 2025-10-06: 初期実装完了
+### 2025-10-06 (2): アニメーション機能をMP4対応に変更
+
+#### 変更内容
+
+**背景**: 当初はPNG連番フレームでアニメーション再生を想定していたが、MP4動画でのループ再生に変更
+
+**変更点**:
+1. **animations.csv のフォーマット変更**
+   - 変更前: `frame_count`, `fps`, `frame_prefix` (PNG連番用)
+   - 変更後: `video_path` (MP4ファイルパス)
+   - `loop` フラグは維持
+
+2. **AnimationPlayer の完全書き換え**
+   - PNG連番読み込み → MP4動画再生に変更
+   - `QMediaPlayer` + `QVideoWidget` を使用
+   - ループ再生機能実装
+   - 音声はミュート設定
+
+3. **依存関係の追加**
+   - `PyQt6-Multimedia==6.6.1` を requirements.txt に追加
+
+**使い方**:
+```csv
+animation_id,name,video_path,loop,description
+idle,待機中,animations/idle.mp4,true,画像未読み込み時のアニメーション
+```
+
+**必要なファイル**:
+- `animations/splash.mp4` - 起動時アニメーション
+- `animations/idle.mp4` - 待機中アニメーション（ループ）
+
+### 2025-10-06 (1): 初期実装完了
 
 #### 実装内容
 

@@ -1,29 +1,43 @@
-"""アニメーション再生クラス"""
+"""アニメーション再生クラス（MP4対応）"""
 import csv
 from pathlib import Path
-from PyQt6.QtWidgets import QWidget, QLabel
-from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimediaWidgets import QVideoWidget
 
 
-class AnimationPlayer(QLabel):
-    """アニメーション再生クラス"""
+class AnimationPlayer(QWidget):
+    """MP4動画を再生するクラス"""
 
     def __init__(self, animation_id: str, parent=None):
         super().__init__(parent)
         self.animation_id = animation_id
         self.animation_data = None
-        self.frames = []
-        self.current_frame = 0
         self.is_playing = False
 
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_frame)
+        # メディアプレイヤーの設定
+        self.player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        self.audio_output.setVolume(0)  # ミュート
+        self.player.setAudioOutput(self.audio_output)
 
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # ビデオウィジェット
+        self.video_widget = QVideoWidget(self)
+        self.player.setVideoOutput(self.video_widget)
+
+        # レイアウト
+        from PyQt6.QtWidgets import QVBoxLayout
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.video_widget)
+        self.setLayout(layout)
 
         # アニメーションデータを読み込み
-        self.load_animation()
+        if self.load_animation():
+            # ループ設定
+            if self.animation_data.get('loop', False):
+                self.player.mediaStatusChanged.connect(self._on_media_status_changed)
 
     def load_animation(self) -> bool:
         """
@@ -36,6 +50,7 @@ class AnimationPlayer(QLabel):
             # CSVファイルを読み込み
             csv_path = Path("animations/animations.csv")
             if not csv_path.exists():
+                print(f"CSVファイルが見つかりません: {csv_path}")
                 return False
 
             with open(csv_path, 'r', encoding='utf-8') as f:
@@ -44,83 +59,61 @@ class AnimationPlayer(QLabel):
                     if row['animation_id'] == self.animation_id:
                         self.animation_data = {
                             'name': row['name'],
-                            'frame_count': int(row['frame_count']),
-                            'fps': int(row['fps']),
+                            'video_path': row['video_path'],
                             'loop': row['loop'].lower() == 'true',
-                            'frame_prefix': row['frame_prefix'],
                             'description': row['description']
                         }
                         break
 
             if not self.animation_data:
+                print(f"アニメーションID '{self.animation_id}' が見つかりません")
                 return False
 
-            # フレーム画像を読み込み
-            self.load_frames()
+            # 動画ファイルのパスを確認
+            video_path = Path(self.animation_data['video_path'])
+            if not video_path.exists():
+                print(f"動画ファイルが見つかりません: {video_path}")
+                return False
 
-            return len(self.frames) > 0
+            # メディアソースを設定
+            self.player.setSource(QUrl.fromLocalFile(str(video_path.absolute())))
+
+            return True
 
         except Exception as e:
             print(f"アニメーション読み込みエラー: {e}")
+            import traceback
+            traceback.print_exc()
             return False
-
-    def load_frames(self):
-        """全フレームをプリロード"""
-        self.frames = []
-
-        frames_dir = Path("animations/frames")
-        if not frames_dir.exists():
-            return
-
-        frame_count = self.animation_data['frame_count']
-        frame_prefix = self.animation_data['frame_prefix']
-
-        for i in range(1, frame_count + 1):
-            frame_path = frames_dir / f"{frame_prefix}{i:03d}.png"
-            if frame_path.exists():
-                pixmap = QPixmap(str(frame_path))
-                self.frames.append(pixmap)
-            else:
-                print(f"フレームが見つかりません: {frame_path}")
 
     def play(self):
         """再生開始"""
-        if not self.frames or self.is_playing:
+        if not self.animation_data:
             return
 
         self.is_playing = True
-        self.current_frame = 0
-
-        # フレームレートに基づいてタイマー間隔を設定
-        frame_duration = int(1000 / self.animation_data['fps'])
-        self.timer.start(frame_duration)
-
-        # 最初のフレームを表示
-        self.show_current_frame()
+        self.player.play()
 
     def stop(self):
         """再生停止"""
         self.is_playing = False
-        self.timer.stop()
+        self.player.stop()
 
-    def update_frame(self):
-        """フレームを更新"""
-        if not self.frames:
-            return
+    def pause(self):
+        """一時停止"""
+        self.player.pause()
 
-        self.current_frame += 1
+    def _on_media_status_changed(self, status):
+        """メディアステータス変更時（ループ処理）"""
+        from PyQt6.QtMultimedia import QMediaPlayer
 
-        # ループ判定
-        if self.current_frame >= len(self.frames):
-            if self.animation_data['loop']:
-                self.current_frame = 0
-            else:
-                self.stop()
-                return
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            if self.animation_data.get('loop', False) and self.is_playing:
+                # ループ再生
+                self.player.setPosition(0)
+                self.player.play()
 
-        self.show_current_frame()
-
-    def show_current_frame(self):
-        """現在のフレームを表示"""
-        if 0 <= self.current_frame < len(self.frames):
-            self.setPixmap(self.frames[self.current_frame])
+    def setFixedSize(self, width, height):
+        """サイズ固定"""
+        super().setFixedSize(width, height)
+        self.video_widget.setFixedSize(width, height)
