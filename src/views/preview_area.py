@@ -1,7 +1,10 @@
 """画像プレビューエリア"""
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QGridLayout, QLabel, QPushButton
-from PyQt6.QtCore import pyqtSignal, Qt
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
+    QGridLayout, QLabel, QPushButton, QApplication
+)
+from PyQt6.QtCore import pyqtSignal, Qt, QPoint, QMimeData
+from PyQt6.QtGui import QPixmap, QDrag, QPainter, QColor
 from src.models.image_model import ImageModel
 from src.utils.animation import AnimationPlayer
 
@@ -11,15 +14,18 @@ class PreviewArea(QWidget):
 
     # シグナル
     selection_changed = pyqtSignal(list)
-    order_changed = pyqtSignal()
+    order_changed = pyqtSignal(int, int)  # (from_index, to_index)
     image_clicked = pyqtSignal(int)
+    delete_requested = pyqtSignal(list)  # 削除する画像のインデックスリスト
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.images: list[ImageModel] = []
-        self.thumbnail_widgets: list[QLabel] = []
+        self.thumbnail_widgets: list = []
         self.thumbnail_size: int = 200
         self.animation_player: AnimationPlayer = None
+        self.selected_indices: list[int] = []
+        self.last_selected_index: int = -1
 
         self.init_ui()
 
@@ -29,9 +35,9 @@ class PreviewArea(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # スクロールエリア
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         # グリッドコンテナ
         self.grid_widget = QWidget()
@@ -39,8 +45,8 @@ class PreviewArea(QWidget):
         self.grid_layout.setSpacing(10)
         self.grid_widget.setLayout(self.grid_layout)
 
-        scroll.setWidget(self.grid_widget)
-        layout.addWidget(scroll)
+        self.scroll.setWidget(self.grid_widget)
+        layout.addWidget(self.scroll)
 
         # コントロールボタン
         control_layout = QHBoxLayout()
@@ -90,6 +96,8 @@ class PreviewArea(QWidget):
         """画像を読み込んで表示"""
         self.images = images
         self.clear_grid()
+        self.selected_indices.clear()
+        self.last_selected_index = -1
 
         if not images:
             self.show_idle_animation()
@@ -109,13 +117,19 @@ class PreviewArea(QWidget):
                 image.load_thumbnail(self.thumbnail_size)
 
             # サムネイルウィジェット作成
-            thumbnail_widget = ThumbnailWidget(image, i)
+            thumbnail_widget = ThumbnailWidget(image, i, self)
             thumbnail_widget.clicked.connect(self._on_thumbnail_clicked)
+            thumbnail_widget.drag_started.connect(self._on_drag_started)
+            thumbnail_widget.drop_received.connect(self._on_drop_received)
 
             row = i // cols
             col = i % cols
             self.grid_layout.addWidget(thumbnail_widget, row, col)
             self.thumbnail_widgets.append(thumbnail_widget)
+
+        # 選択状態を復元
+        for widget in self.thumbnail_widgets:
+            widget.set_selected(widget.index in self.selected_indices)
 
     def clear_grid(self):
         """グリッドをクリア"""
@@ -135,6 +149,7 @@ class PreviewArea(QWidget):
 
         if not self.animation_player:
             self.animation_player = AnimationPlayer("idle", self.grid_widget)
+            self.animation_player.setFixedSize(300, 300)
 
         self.animation_player.show()
         self.animation_player.play()
@@ -167,20 +182,93 @@ class PreviewArea(QWidget):
         from src.utils.constants import DEFAULT_THUMBNAIL_SIZE
         self.update_thumbnail_size(DEFAULT_THUMBNAIL_SIZE)
 
-    def _on_thumbnail_clicked(self, index: int):
+    def _on_thumbnail_clicked(self, index: int, modifiers):
         """サムネイルクリック時"""
-        self.image_clicked.emit(index)
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            # Ctrl+クリック: トグル選択
+            if index in self.selected_indices:
+                self.selected_indices.remove(index)
+            else:
+                self.selected_indices.append(index)
+            self.last_selected_index = index
+
+        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
+            # Shift+クリック: 範囲選択
+            if self.last_selected_index >= 0:
+                start = min(self.last_selected_index, index)
+                end = max(self.last_selected_index, index)
+                self.selected_indices = list(range(start, end + 1))
+            else:
+                self.selected_indices = [index]
+                self.last_selected_index = index
+
+        else:
+            # 通常クリック: 単一選択
+            self.selected_indices = [index]
+            self.last_selected_index = index
+            # ダブルクリックで拡大表示
+            self.image_clicked.emit(index)
+
+        # 選択状態を更新
+        for widget in self.thumbnail_widgets:
+            widget.set_selected(widget.index in self.selected_indices)
+
+        self.selection_changed.emit(self.selected_indices)
+
+    def _on_drag_started(self, index: int):
+        """ドラッグ開始時"""
+        # 選択されていない場合は選択
+        if index not in self.selected_indices:
+            self.selected_indices = [index]
+            for widget in self.thumbnail_widgets:
+                widget.set_selected(widget.index in self.selected_indices)
+
+    def _on_drop_received(self, from_index: int, to_index: int):
+        """ドロップ受信時"""
+        if from_index != to_index:
+            self.order_changed.emit(from_index, to_index)
+
+    def keyPressEvent(self, event):
+        """キーボードイベント"""
+        # Delete/Space: 削除
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Space):
+            if self.selected_indices:
+                self.delete_requested.emit(self.selected_indices)
+
+        # Ctrl+A: 全選択
+        elif event.key() == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.selected_indices = list(range(len(self.images)))
+            for widget in self.thumbnail_widgets:
+                widget.set_selected(True)
+            self.selection_changed.emit(self.selected_indices)
+
+        # Ctrl+D / Esc: 選択解除
+        elif (event.key() == Qt.Key.Key_D and event.modifiers() & Qt.KeyboardModifier.ControlModifier) or \
+             event.key() == Qt.Key.Key_Escape:
+            self.selected_indices.clear()
+            for widget in self.thumbnail_widgets:
+                widget.set_selected(False)
+            self.selection_changed.emit(self.selected_indices)
+
+        super().keyPressEvent(event)
 
 
 class ThumbnailWidget(QWidget):
-    """サムネイルウィジェット"""
+    """ドラッグ可能なサムネイルウィジェット"""
 
-    clicked = pyqtSignal(int)
+    clicked = pyqtSignal(int, Qt.KeyboardModifier)
+    drag_started = pyqtSignal(int)
+    drop_received = pyqtSignal(int, int)  # (from_index, to_index)
 
     def __init__(self, image: ImageModel, index: int, parent=None):
         super().__init__(parent)
         self.image = image
         self.index = index
+        self.drag_start_position = None
+        self.is_selected = False
+
+        # ドラッグ&ドロップを有効化
+        self.setAcceptDrops(True)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(5, 5, 5, 5)
@@ -207,29 +295,17 @@ class ThumbnailWidget(QWidget):
 
         self.setLayout(layout)
 
-        # 選択状態のスタイル
-        self.setStyleSheet("""
-            ThumbnailWidget {
-                border: 2px solid transparent;
-                border-radius: 4px;
-            }
-            ThumbnailWidget:hover {
-                border: 2px solid #BBDEFB;
-            }
-        """)
+        # デフォルトスタイル
+        self.update_style()
 
-    def mousePressEvent(self, event):
-        """マウスクリック時"""
-        self.clicked.emit(self.index)
-        super().mousePressEvent(event)
-
-    def set_selected(self, selected: bool):
-        """選択状態を設定"""
-        if selected:
+    def update_style(self):
+        """スタイルを更新"""
+        if self.is_selected:
             self.setStyleSheet("""
                 ThumbnailWidget {
                     border: 3px solid #2196F3;
                     border-radius: 4px;
+                    background-color: #E3F2FD;
                 }
             """)
         else:
@@ -237,8 +313,60 @@ class ThumbnailWidget(QWidget):
                 ThumbnailWidget {
                     border: 2px solid transparent;
                     border-radius: 4px;
+                    background-color: white;
                 }
                 ThumbnailWidget:hover {
                     border: 2px solid #BBDEFB;
                 }
             """)
+
+    def set_selected(self, selected: bool):
+        """選択状態を設定"""
+        self.is_selected = selected
+        self.update_style()
+
+    def mousePressEvent(self, event):
+        """マウス押下時"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_start_position = event.pos()
+            self.clicked.emit(self.index, QApplication.keyboardModifiers())
+
+    def mouseMoveEvent(self, event):
+        """マウス移動時（ドラッグ）"""
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        if not self.drag_start_position:
+            return
+
+        # ドラッグ距離チェック
+        if (event.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
+            return
+
+        # ドラッグ開始
+        self.drag_started.emit(self.index)
+
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setText(str(self.index))
+        drag.setMimeData(mime_data)
+
+        # ドラッグ時のプレビュー画像
+        if self.image.thumbnail:
+            pixmap = self.image.thumbnail.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio)
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
+
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def dragEnterEvent(self, event):
+        """ドラッグ侵入時"""
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        """ドロップ時"""
+        if event.mimeData().hasText():
+            from_index = int(event.mimeData().text())
+            to_index = self.index
+            self.drop_received.emit(from_index, to_index)
+            event.acceptProposedAction()

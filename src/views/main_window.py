@@ -52,6 +52,8 @@ class MainWindow(QMainWindow):
         self.preview_area.image_clicked.connect(self._on_image_clicked)
         self.preview_area.sort_requested.connect(self._on_sort_requested)
         self.preview_area.restore_requested.connect(self._on_restore_order)
+        self.preview_area.order_changed.connect(self._on_order_changed)
+        self.preview_area.delete_requested.connect(self._on_delete_requested)
         layout.addWidget(self.preview_area, 4)
 
         # 右: 設定パネル（1/5）
@@ -212,8 +214,11 @@ class MainWindow(QMainWindow):
 
     def _on_image_clicked(self, index: int):
         """画像クリック時"""
-        # TODO: プレビューダイアログを表示
-        pass
+        from src.views.preview_dialog import PreviewDialog
+
+        dialog = PreviewDialog(self.image_controller.images, index, self)
+        dialog.image_deleted.connect(lambda idx: self._on_delete_requested([idx]))
+        dialog.exec()
 
     def _on_sort_requested(self, ascending: bool):
         """ソートリクエスト時"""
@@ -234,6 +239,31 @@ class MainWindow(QMainWindow):
         """Redo"""
         if self.image_controller.redo():
             self.preview_area.load_images(self.image_controller.images)
+
+    def _on_order_changed(self, from_index: int, to_index: int):
+        """順序変更時（ドラッグ&ドロップ）"""
+        self.image_controller.reorder(from_index, to_index)
+        self.preview_area.load_images(self.image_controller.images)
+        self.logger.info(f"画像を並べ替え: {from_index} → {to_index}")
+
+    def _on_delete_requested(self, indices: list[int]):
+        """削除リクエスト時"""
+        if not indices:
+            return
+
+        # 確認ダイアログ
+        reply = QMessageBox.question(
+            self,
+            "削除確認",
+            f"{len(indices)}枚の画像を削除しますか？\n\n"
+            "この操作はUndo可能です。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.image_controller.delete_images(indices)
+            self.preview_area.load_images(self.image_controller.images)
+            self.logger.info(f"{len(indices)}枚の画像を削除")
 
     def _show_about(self):
         """バージョン情報を表示"""
