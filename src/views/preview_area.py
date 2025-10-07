@@ -31,6 +31,9 @@ class PreviewArea(QWidget):
 
     def init_ui(self):
         """UIを初期化"""
+        # フォーカスを受け取れるように設定
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -178,13 +181,29 @@ class PreviewArea(QWidget):
             self.load_images(self.images)
 
     def _update_existing_thumbnails(self, size: int):
-        """既存のサムネイルウィジェットを更新（高速）"""
-        for widget in self.thumbnail_widgets:
-            # サムネイル再生成（キャッシュ利用）
-            widget.image.load_thumbnail(size)
+        """既存のサムネイルウィジェットを更新（超高速：Qt側でリサイズ）"""
+        # レイアウト更新を一時停止（高速化）
+        self.grid_widget.setUpdatesEnabled(False)
 
-            # ウィジェットのサムネイル更新
-            widget.update_thumbnail(size)
+        # 新しい列数を計算
+        cols = max(1, self.scroll.viewport().width() // (size + 20))
+
+        # グリッドをクリアして再配置
+        for i, widget in enumerate(self.thumbnail_widgets):
+            # 古い位置から削除
+            self.grid_layout.removeWidget(widget)
+
+            # ウィジェットのサムネイル更新（Qtの scaled() を使用）
+            widget.update_thumbnail_size(size)
+
+            # 新しい位置に配置
+            row = i // cols
+            col = i % cols
+            self.grid_layout.addWidget(widget, row, col)
+
+        # レイアウト更新を再開
+        self.grid_widget.setUpdatesEnabled(True)
+        self.grid_widget.update()
 
     def zoom_in(self):
         """拡大"""
@@ -280,6 +299,8 @@ class PreviewArea(QWidget):
         super().keyPressEvent(event)
 
 
+
+
 class ThumbnailWidget(QWidget):
     """ドラッグ可能なサムネイルウィジェット"""
 
@@ -296,6 +317,9 @@ class ThumbnailWidget(QWidget):
         self.drag_start_position = None
         self.is_selected = False
         self.thumbnail_size = thumbnail_size
+
+        # 元のサムネイル（初回読み込み時のもの）を保持
+        self.original_thumbnail = image.thumbnail
 
         # ダブルクリック検出用
         self.click_timer = QTimer()
@@ -429,19 +453,28 @@ class ThumbnailWidget(QWidget):
         self.is_selected = selected
         self.update_style()
 
-    def update_thumbnail(self, size: int):
-        """サムネイル画像を更新（ウィジェット再作成なし）"""
+    def update_thumbnail_size(self, size: int):
+        """サムネイルサイズを変更（超高速：Qt側でリサイズ）"""
         self.thumbnail_size = size
 
-        # 画像とコンテナのサイズ更新
-        if self.image.thumbnail:
-            new_size = self.image.thumbnail.size()
-            self.thumbnail_container.setFixedSize(new_size)
-            self.thumbnail_label.setPixmap(self.image.thumbnail)
-            self.thumbnail_label.setFixedSize(new_size)
+        if not self.original_thumbnail:
+            return
 
-            # 虫眼鏡ボタンの位置を更新
-            self._update_magnifier_position()
+        # 元のサムネイルをQt側でリサイズ（Pillowでの再生成なし）
+        scaled_pixmap = self.original_thumbnail.scaled(
+            size, size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation  # 高品質リサイズ
+        )
+
+        # コンテナとラベルのサイズを更新
+        new_size = scaled_pixmap.size()
+        self.thumbnail_container.setFixedSize(new_size)
+        self.thumbnail_label.setPixmap(scaled_pixmap)
+        self.thumbnail_label.setFixedSize(new_size)
+
+        # 虫眼鏡ボタンの位置を更新
+        self._update_magnifier_position()
 
     def mouseMoveEvent(self, event):
         """マウス移動時（ドラッグ）"""

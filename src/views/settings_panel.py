@@ -18,6 +18,7 @@ class SettingsPanel(QWidget):
     settings_changed = pyqtSignal(dict)
     save_requested = pyqtSignal()
     open_folder_requested = pyqtSignal()
+    reset_requested = pyqtSignal()  # リセットシグナル
 
     def __init__(self, config: ConfigModel, parent=None):
         super().__init__(parent)
@@ -26,6 +27,9 @@ class SettingsPanel(QWidget):
 
         self.init_ui()
         self.restore_settings()
+
+        # 初期表示用のサンプル更新
+        self._update_sample_names()
 
     def init_ui(self):
         """UIを初期化"""
@@ -51,7 +55,10 @@ class SettingsPanel(QWidget):
         # スペーサー
         layout.addStretch()
 
-        # セクション5: 保存ボタン
+        # セクション5: リセットボタン
+        layout.addWidget(self._create_reset_button())
+
+        # セクション6: 保存ボタン
         layout.addWidget(self._create_save_button())
 
         self.setLayout(layout)
@@ -177,11 +184,10 @@ class SettingsPanel(QWidget):
 
         # サンプル表示
         layout.addWidget(QLabel("サンプル:"))
-        self.sample_label = QLabel()
+        self.sample_label = QLabel("001.jpg")  # デフォルト表示
         self.sample_label.setStyleSheet(
-            "background-color: #f5f5f5; padding: 8px; border-radius: 4px; font-family: monospace;"
+            "background-color: #f5f5f5; padding: 8px; border-radius: 4px; font-family: monospace; color: #000;"
         )
-        self.sample_label.setWordWrap(True)
         layout.addWidget(self.sample_label)
 
         widget.setLayout(layout)
@@ -255,6 +261,30 @@ class SettingsPanel(QWidget):
         widget.setLayout(layout)
         return widget
 
+    def _create_reset_button(self) -> QPushButton:
+        """リセットボタン"""
+        reset_btn = QPushButton("🔄 リセット")
+        reset_btn.setObjectName("ResetButton")
+        reset_btn.setStyleSheet("""
+            QPushButton#ResetButton {
+                height: 36px;
+                background-color: #FF9800;
+                color: white;
+                font-size: 12pt;
+                font-weight: bold;
+                border-radius: 4px;
+                border: none;
+            }
+            QPushButton#ResetButton:hover {
+                background-color: #F57C00;
+            }
+            QPushButton#ResetButton:pressed {
+                background-color: #E65100;
+            }
+        """)
+        reset_btn.clicked.connect(self._on_reset_clicked)
+        return reset_btn
+
     def _create_save_button(self) -> QPushButton:
         """保存ボタン"""
         save_btn = QPushButton("💾 保存")
@@ -323,6 +353,10 @@ class SettingsPanel(QWidget):
             self.output_path_input.setText(folder)
             self.config.set("last_output_folder", folder)
 
+    def _on_reset_clicked(self):
+        """リセットボタンクリック時"""
+        self.reset_requested.emit()
+
     def _on_save_clicked(self):
         """保存ボタンクリック時"""
         self.save_requested.emit()
@@ -336,15 +370,20 @@ class SettingsPanel(QWidget):
         template_names = ["sequential", "text_number", "date_number"]
         template = template_names[self.template_combo.currentIndex()]
 
+        # JPG変換が有効な場合は.jpg、それ以外はサンプルとして.jpgを表示
+        # （実際の保存時は元ファイルの拡張子が使用される）
+        extension = "jpg"
+
         samples = self.rename_controller.generate_sample_names(
             template=template,
             prefix=self.prefix_input.text(),
             start=self.start_number_spin.value(),
             digits=self.digits_spin.value(),
-            count=3
+            extension=extension,
+            count=1  # 1行のみ表示
         )
 
-        self.sample_label.setText("\n".join(samples))
+        self.sample_label.setText(samples[0] if samples else "")
 
     def restore_settings(self):
         """設定を復元"""
@@ -380,7 +419,7 @@ class SettingsPanel(QWidget):
         self._on_mode_changed()
         self._on_template_changed()
         self._on_jpg_convert_changed(Qt.CheckState.Checked.value if jpg_convert else Qt.CheckState.Unchecked.value)
-        self._update_sample_names()
+        # サンプル更新は_on_template_changed()内で呼ばれるので不要
 
     def get_rename_settings(self) -> dict:
         """リネーム設定を取得"""

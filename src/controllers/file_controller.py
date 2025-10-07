@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from PIL import Image
 from src.models.image_model import ImageModel
+from src.controllers.rename_controller import RenameController
 
 
 class FileController:
@@ -11,6 +12,7 @@ class FileController:
 
     def __init__(self, logger=None):
         self.logger = logger
+        self.rename_controller = RenameController()
 
     def save_images(
         self,
@@ -51,12 +53,20 @@ class FileController:
                 break
 
             try:
-                # 新しいファイル名を生成
-                new_filename = image.get_new_filename(
+                # 拡張子を決定（JPG変換時は.jpg、それ以外は元の拡張子）
+                if jpg_convert and image.extension.lower() in ['.png']:
+                    extension = "jpg"
+                else:
+                    # 元の拡張子を使用（先頭のドットを削除）
+                    extension = image.extension.lstrip('.')
+
+                # 新しいファイル名を生成（RenameControllerを使用）
+                new_filename = self.rename_controller.generate_filename(
                     template=rename_settings["template"],
+                    prefix=rename_settings.get("prefix", ""),
                     number=rename_settings["start_number"] + i,
                     digits=rename_settings["digits"],
-                    extension=rename_settings.get("extension")
+                    extension=extension
                 )
 
                 # 出力先パス
@@ -103,20 +113,34 @@ class FileController:
 
     def create_folder(self, parent_path: str, folder_name: str) -> str:
         """
-        新規フォルダを作成
+        新規フォルダを作成（重複時は自動的に_1, _2...を付ける）
 
         Args:
             parent_path: 親ディレクトリパス
             folder_name: 新規フォルダ名
 
         Returns:
-            作成したフォルダのパス（失敗時はNone）
+            作成したフォルダのパス
         """
         try:
-            new_folder = Path(parent_path) / folder_name
+            parent = Path(parent_path)
+            new_folder = parent / folder_name
 
+            # 重複している場合、_1, _2...を付ける
             if new_folder.exists():
-                raise FileExistsError(f"フォルダが既に存在します: {folder_name}")
+                counter = 1
+                while True:
+                    candidate_name = f"{folder_name}_{counter}"
+                    candidate_folder = parent / candidate_name
+                    if not candidate_folder.exists():
+                        new_folder = candidate_folder
+                        if self.logger:
+                            self.logger.info(f"フォルダ名重複のため自動リネーム: {folder_name} → {candidate_name}")
+                        break
+                    counter += 1
+                    # 無限ループ防止（1000まで試して見つからなければエラー）
+                    if counter > 1000:
+                        raise FileExistsError(f"利用可能なフォルダ名が見つかりません: {folder_name}")
 
             new_folder.mkdir(parents=True, exist_ok=False)
 

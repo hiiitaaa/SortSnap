@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.mode_changed.connect(self._on_mode_changed)
         self.settings_panel.save_requested.connect(self._on_save_requested)
         self.settings_panel.open_folder_requested.connect(self.open_folder)
+        self.settings_panel.reset_requested.connect(self._on_reset_requested)
         layout.addWidget(self.settings_panel, 1)
 
         central_widget.setLayout(layout)
@@ -122,7 +123,17 @@ class MainWindow(QMainWindow):
 
     def setup_shortcuts(self):
         """キーボードショートカットを設定"""
-        pass  # メニューバーで設定済み
+        # Alt+↑: サムネイル拡大
+        zoom_in_action = QAction(self)
+        zoom_in_action.setShortcut(QKeySequence("Alt+Up"))
+        zoom_in_action.triggered.connect(self.preview_area.zoom_in)
+        self.addAction(zoom_in_action)
+
+        # Alt+↓: サムネイル縮小
+        zoom_out_action = QAction(self)
+        zoom_out_action.setShortcut(QKeySequence("Alt+Down"))
+        zoom_out_action.triggered.connect(self.preview_area.zoom_out)
+        self.addAction(zoom_out_action)
 
     def open_folder(self):
         """フォルダを開く"""
@@ -164,16 +175,9 @@ class MainWindow(QMainWindow):
                 new_folder_name = datetime.now().strftime("%y%m%d")
 
             try:
-                # 新規フォルダを作成
+                # 新規フォルダを作成（重複時は自動的に_1, _2...が付く）
                 output_path = self.file_controller.create_folder(output_path, new_folder_name)
                 self.logger.info(f"新規フォルダ作成: {output_path}")
-            except FileExistsError:
-                QMessageBox.warning(
-                    self,
-                    "エラー",
-                    f"フォルダ '{new_folder_name}' は既に存在します。\n別の名前を指定してください。"
-                )
-                return
             except Exception as e:
                 QMessageBox.critical(
                     self,
@@ -305,6 +309,32 @@ class MainWindow(QMainWindow):
             self.preview_area.load_images(self.image_controller.images)
             self.logger.info(f"{len(indices)}枚の画像を削除")
 
+    def _on_reset_requested(self):
+        """リセットリクエスト時"""
+        # 画像が読み込まれていない場合は何もしない
+        if not self.image_controller.images:
+            return
+
+        # 確認ダイアログ
+        reply = QMessageBox.question(
+            self,
+            "リセット確認",
+            f"読み込んだ{len(self.image_controller.images)}枚の画像をリセットしますか？\n\n"
+            "この操作は取り消せません。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # 画像コントローラーをリセット
+            self.image_controller.images.clear()
+            self.image_controller.original_order.clear()
+            self.image_controller.history.clear()
+
+            # プレビューエリアをリセット（初期状態に戻す）
+            self.preview_area.load_images([])
+
+            self.logger.info("画像をリセット")
+
     def _show_about(self):
         """バージョン情報を表示"""
         from src.utils.constants import APP_NAME, APP_VERSION, BUILD_DATE
@@ -366,58 +396,88 @@ class MainWindow(QMainWindow):
             self.settings_panel.new_folder_mode_radio.setChecked(True)
             self.logger.info(f"{len(image_files)}枚の画像ファイルをドロップ受信")
 
-            # 画像を読み込み
-            images = self.image_controller.load_from_files(image_files)
-            self.preview_area.load_images(images)
+            # 非同期読み込み + プログレスバー
+            from src.controllers.load_worker import LoadWorker
+            from src.views.progress_dialog import ProgressDialog
 
-            # デフォルトの出力先を設定
-            if image_files:
-                first_file = Path(image_files[0])
-                default_output = str(first_file.parent)
-                self.settings_panel.output_path_input.setText(default_output)
-                self.config.set("last_output_folder", default_output)
+            # プログレスダイアログを表示
+            progress_dialog = ProgressDialog(len(image_files), self, mode="load")
+
+            # ワーカースレッド作成
+            self.load_worker = LoadWorker(
+                file_paths=image_files,
+                thumbnail_size=self.preview_area.thumbnail_size
+            )
+
+            # デフォルトの出力先を取得
+            first_file = Path(image_files[0])
+            default_output = str(first_file.parent)
+
+            # シグナル接続
+            self.load_worker.progress.connect(progress_dialog.update_progress)
+            self.load_worker.finished.connect(
+                lambda images: self._on_files_load_finished(images, default_output, progress_dialog)
+            )
+            self.load_worker.error.connect(
+                lambda error_msg: self._on_load_error(error_msg, progress_dialog)
+            )
+
+            # 読み込み開始
+            self.load_worker.start()
+            progress_dialog.exec()
+
+    def _on_files_load_finished(self, images, default_output, progress_dialog):
+        """ファイル読み込み完了時"""
+        # プログレスダイアログを閉じる
+        import time
+        time.sleep(0.5)
+        progress_dialog.accept()
+
+        # コントローラーに画像を設定
+        self.image_controller.images = images
+        self.image_controller.original_order = images.copy()
+        self.image_controller.history.clear()
+
+        # デフォルトの出力先を設定
+        self.settings_panel.output_path_input.setText(default_output)
+        self.config.set("last_output_folder", default_output)
+
+        # プレビュー表示
+        self.preview_area.load_images(images)
+
+        self.logger.info(f"ファイル読み込み完了: {len(images)}枚")
 
     def load_folder(self, folder_path: str):
         """フォルダを読み込む（内部メソッド）"""
         self.logger.info(f"フォルダ読み込み開始: {folder_path}")
 
-        try:
-            images = self.image_controller.load_from_folder(folder_path)
-        except FileNotFoundError as e:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                f"フォルダが見つかりません。\n\n{folder_path}"
-            )
+        # 非同期読み込み + プログレスバー
+        from src.controllers.load_worker import LoadWorker
+        from src.views.progress_dialog import ProgressDialog
+
+        # まず画像数を調査（高速）
+        from pathlib import Path
+        from src.utils.constants import SUPPORTED_FORMATS
+
+        folder = Path(folder_path)
+        if not folder.exists():
+            QMessageBox.critical(self, "エラー", f"フォルダが見つかりません。\n\n{folder_path}")
             self.logger.error(f"フォルダが見つかりません: {folder_path}")
             return
-        except NotADirectoryError as e:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                f"指定されたパスはフォルダではありません。\n\n{folder_path}"
-            )
+
+        if not folder.is_dir():
+            QMessageBox.critical(self, "エラー", f"指定されたパスはフォルダではありません。\n\n{folder_path}")
             self.logger.error(f"パスはフォルダではありません: {folder_path}")
             return
-        except PermissionError as e:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                f"フォルダへのアクセス権限がありません。\n\n{folder_path}"
-            )
+
+        try:
+            image_count = sum(1 for f in folder.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_FORMATS)
+        except PermissionError:
+            QMessageBox.critical(self, "エラー", f"フォルダへのアクセス権限がありません。\n\n{folder_path}")
             self.logger.error(f"アクセス権限なし: {folder_path}")
             return
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                f"フォルダの読み込み中にエラーが発生しました。\n\n{str(e)}"
-            )
-            self.logger.error(f"フォルダ読み込みエラー: {folder_path}, {e}")
-            return
 
-        if not images:
-            from src.utils.constants import SUPPORTED_FORMATS
+        if image_count == 0:
             QMessageBox.warning(
                 self,
                 "警告",
@@ -428,15 +488,75 @@ class MainWindow(QMainWindow):
             self.logger.warning(f"対応画像なし: {folder_path}")
             return
 
-        self.logger.info(f"対応画像: {len(images)}枚検出")
+        self.logger.info(f"対応画像: {image_count}枚検出")
+
+        # プログレスダイアログを表示
+        progress_dialog = ProgressDialog(image_count, self, mode="load")
+
+        # ワーカースレッド作成
+        self.load_worker = LoadWorker(
+            folder_path=folder_path,
+            thumbnail_size=self.preview_area.thumbnail_size
+        )
+
+        # シグナル接続
+        self.load_worker.progress.connect(progress_dialog.update_progress)
+        self.load_worker.finished.connect(
+            lambda images: self._on_load_finished(images, folder_path, progress_dialog)
+        )
+        self.load_worker.error.connect(
+            lambda error_msg: self._on_load_error(error_msg, progress_dialog)
+        )
+
+        # 読み込み開始
+        self.load_worker.start()
+        progress_dialog.exec()
+
+    def _on_load_finished(self, images, folder_path, progress_dialog):
+        """読み込み完了時"""
+        # プログレスダイアログを閉じる
+        import time
+        time.sleep(0.5)  # 完了メッセージを0.5秒表示
+        progress_dialog.accept()
+
+        # コントローラーに画像を設定
+        self.image_controller.images = images
+        self.image_controller.original_order = images.copy()
+        self.image_controller.history.clear()
 
         # 設定を保存
         self.config.set("last_input_folder", folder_path)
         self.settings_panel.output_path_input.setText(folder_path)
         self.config.set("last_output_folder", folder_path)
 
-        # プレビュー表示
+        # プレビュー表示（サムネイルは既に生成済み）
         self.preview_area.load_images(images)
+
+        self.logger.info(f"読み込み完了: {len(images)}枚")
+
+    def _on_load_error(self, error_msg, progress_dialog):
+        """読み込みエラー時"""
+        progress_dialog.reject()
+        QMessageBox.critical(self, "エラー", f"読み込み中にエラーが発生しました。\n\n{error_msg}")
+        self.logger.error(f"読み込みエラー: {error_msg}")
+
+    def wheelEvent(self, event):
+        """ホイールイベント（Alt+ホイールでサムネイルサイズ変更）"""
+        # Alt押下時のみサムネイルサイズ変更
+        if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            delta = event.angleDelta().y()
+
+            if delta > 0:
+                # 上回転: 拡大
+                self.preview_area.zoom_in()
+            elif delta < 0:
+                # 下回転: 縮小
+                self.preview_area.zoom_out()
+
+            event.accept()
+        else:
+            # 通常のスクロール処理
+            super().wheelEvent(event)
 
     def closeEvent(self, event):
         """ウィンドウを閉じる時"""
