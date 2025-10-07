@@ -19,6 +19,7 @@ class ConfigModel:
         "jpg_convert": False,
         "jpg_quality": 95,
         "show_save_confirmation": True,
+        "show_delete_confirmation": True,  # 削除確認ダイアログを表示するか
         "thumbnail_size": 200,
         "window_size": [1920, 1080],
         "window_position": None,

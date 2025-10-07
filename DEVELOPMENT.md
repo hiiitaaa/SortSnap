@@ -702,6 +702,64 @@ python main.py
 - **標準logging**: Pythonの標準ライブラリ使用
 - **ローテーション**: 最新30件のログファイルを保持
 
+---
+
+### 2025-10-07 (8): 複数選択ドラッグ&ドロップ機能（Phase 7）
+
+#### 実装内容
+
+**複数選択した画像を一括でドラッグ&ドロップ移動できる機能**
+
+1. **ImageControllerに複数画像移動メソッド追加**
+   - `reorder_multiple(indices: list[int], to_index: int)` メソッド実装
+   - 選択された複数画像を維持したまま一括移動
+   - インデックス調整ロジック（削除前のインデックスから移動後の位置を計算）
+   - Undo/Redo対応
+   - `src/controllers/image_controller.py:143-184, 320-338`
+
+2. **PreviewAreaでの複数選択検出と送信**
+   - `order_changed_multiple` シグナル追加 (`list[int], int`)
+   - `ThumbnailWidget`: MIMEデータにカンマ区切りでインデックス送信 (例: "0,2,5")
+   - `dropEvent()`: カンマ検出で複数選択処理に分岐
+   - `src/views/preview_area.py:18, 320, 520-593`
+
+3. **MainWindow で複数選択時の分岐処理**
+   - `_on_order_changed_multiple()` ハンドラ追加
+   - シグナル接続: `order_changed_multiple.connect()`
+   - `src/views/main_window.py:59, 294-298`
+
+4. **遅延バインディング方式でpreview_area参照を設定**
+   - **問題**: `ThumbnailWidget.__init__()` に `preview_area` 引数を追加したが、サムネイルサイズ変更時に既存ウィジェットが再利用されるため参照が `None` のままだった
+   - **解決**: `set_preview_area()` メソッドを追加し、ウィジェット作成後および再利用時に明示的に参照を注入
+   - 防御的プログラミング: `preview_area` 未設定時は単一ドラッグにフォールバック
+   - `src/views/preview_area.py:478-480, 124, 203`
+
+5. **ImageModel.selected との同期**
+   - **問題**: `PreviewArea` は `self.selected_indices` で管理、`ThumbnailWidget.mouseMoveEvent()` は `ImageModel.selected` を参照していたため同期ズレが発生
+   - **解決**: `_on_thumbnail_clicked()` および `_on_drag_started()` で `ImageModel.selected` を同期更新
+   - Ctrl+クリック、Shift+クリック両対応
+   - `src/views/preview_area.py:254-262, 277-284`
+
+#### 技術的解決策
+
+**遅延バインディングパターン**:
+- ウィジェットの再利用によるライフサイクル問題を解決
+- 参照を後から注入可能にすることで柔軟性を確保
+- Gemini CLI との協業で選択した設計アプローチ
+
+**データ同期パターン**:
+- UI状態（`PreviewArea.selected_indices`）とモデル状態（`ImageModel.selected`）を明示的に同期
+- 単一の真実の源（Source of Truth）を維持
+
+#### 動作確認
+
+- Ctrl+クリック: 複数選択（トグル）→ ドラッグ&ドロップ → 全画像一括移動 ✅
+- Shift+クリック: 範囲選択 → ドラッグ&ドロップ → 全画像一括移動 ✅
+- Undo/Redo: 複数画像移動の取り消し・やり直し ✅
+- 単一選択: 既存動作と同じ（影響なし） ✅
+
+---
+
 ## 参考資料
 
 - 要件定義書: `SortSnap_要件定義書_v2.0.md`

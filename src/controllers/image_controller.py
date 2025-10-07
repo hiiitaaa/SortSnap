@@ -140,6 +140,49 @@ class ImageController:
         # インデックスを更新
         self._update_indices()
 
+    def reorder_multiple(self, indices: list[int], to_index: int):
+        """
+        複数の画像の順序を一括変更（履歴に記録）
+
+        Args:
+            indices: 移動する画像のインデックスリスト（昇順ソート済みを想定）
+            to_index: 移動先のインデックス
+        """
+        if not indices:
+            return
+
+        # インデックスを昇順ソート
+        sorted_indices = sorted(set(indices))
+
+        # 履歴に記録
+        self.history.push({
+            "type": "reorder_multiple",
+            "data": {
+                "indices": sorted_indices,
+                "to_index": to_index,
+                "order": [img.file_path for img in self.images]
+            }
+        })
+
+        # 移動する画像を取得
+        moving_images = [self.images[i] for i in sorted_indices]
+
+        # 降順で削除（インデックスがずれないように）
+        for i in reversed(sorted_indices):
+            self.images.pop(i)
+
+        # 挿入位置を調整（削除した画像の数だけずれる）
+        # to_indexより前にいくつ削除したかをカウント
+        deleted_before = sum(1 for i in sorted_indices if i < to_index)
+        adjusted_to_index = to_index - deleted_before
+
+        # 移動する画像を一括挿入
+        for i, image in enumerate(moving_images):
+            self.images.insert(adjusted_to_index + i, image)
+
+        # インデックスを更新
+        self._update_indices()
+
     def delete_images(self, indices: list[int]):
         """
         画像を削除（履歴に記録）
@@ -232,6 +275,10 @@ class ImageController:
             # 順序を復元
             self._restore_order(data["order"])
 
+        elif action_type == "reorder_multiple":
+            # 複数画像の順序を復元
+            self._restore_order(data["order"])
+
         elif action_type == "delete":
             # 削除された画像を復元
             for i, file_path in data["deleted_images"]:
@@ -269,6 +316,26 @@ class ImageController:
             to_index = data["to_index"]
             image = self.images.pop(from_index)
             self.images.insert(to_index, image)
+
+        elif action_type == "reorder_multiple":
+            # 複数画像の順序変更を再実行
+            indices = data["indices"]
+            to_index = data["to_index"]
+
+            # 移動する画像を取得
+            moving_images = [self.images[i] for i in indices]
+
+            # 降順で削除
+            for i in reversed(indices):
+                self.images.pop(i)
+
+            # 挿入位置を調整
+            deleted_before = sum(1 for i in indices if i < to_index)
+            adjusted_to_index = to_index - deleted_before
+
+            # 移動する画像を一括挿入
+            for i, image in enumerate(moving_images):
+                self.images.insert(adjusted_to_index + i, image)
 
         elif action_type == "delete":
             # 再度削除

@@ -15,6 +15,7 @@ class PreviewArea(QWidget):
     # シグナル
     selection_changed = pyqtSignal(list)
     order_changed = pyqtSignal(int, int)  # (from_index, to_index)
+    order_changed_multiple = pyqtSignal(list, int)  # (from_indices, to_index) - 複数選択時
     image_clicked = pyqtSignal(int)
     delete_requested = pyqtSignal(list)  # 削除する画像のインデックスリスト
 
@@ -119,12 +120,14 @@ class PreviewArea(QWidget):
             image.load_thumbnail(self.thumbnail_size)
 
             # サムネイルウィジェット作成
-            thumbnail_widget = ThumbnailWidget(image, i, self, self.thumbnail_size)
+            thumbnail_widget = ThumbnailWidget(image, i, self, self.thumbnail_size, preview_area=self)
+            thumbnail_widget.set_preview_area(self)  # 遅延バインディング：明示的に設定
             thumbnail_widget.clicked.connect(self._on_thumbnail_clicked)
             thumbnail_widget.double_clicked.connect(self._on_thumbnail_double_clicked)
             thumbnail_widget.preview_requested.connect(self._on_preview_requested)
             thumbnail_widget.drag_started.connect(self._on_drag_started)
             thumbnail_widget.drop_received.connect(self._on_drop_received)
+            thumbnail_widget.drop_received_multiple.connect(self._on_drop_received_multiple)
 
             row = i // cols
             col = i % cols
@@ -196,6 +199,9 @@ class PreviewArea(QWidget):
             # ウィジェットのサムネイル更新（Qtの scaled() を使用）
             widget.update_thumbnail_size(size)
 
+            # 【重要】既存ウィジェットにもpreview_area参照を設定（遅延バインディング）
+            widget.set_preview_area(self)
+
             # 新しい位置に配置
             row = i // cols
             col = i % cols
@@ -245,9 +251,13 @@ class PreviewArea(QWidget):
             self.selected_indices = [index]
             self.last_selected_index = index
 
-        # 選択状態を更新
-        for widget in self.thumbnail_widgets:
-            widget.set_selected(widget.index in self.selected_indices)
+        # 選択状態を更新（ウィジェットとImageModelの両方）
+        for i, widget in enumerate(self.thumbnail_widgets):
+            is_selected = widget.index in self.selected_indices
+            widget.set_selected(is_selected)
+            # ImageModel.selectedも同期
+            if i < len(self.images):
+                self.images[i].selected = is_selected
 
         self.selection_changed.emit(self.selected_indices)
 
@@ -266,13 +276,21 @@ class PreviewArea(QWidget):
         # 選択されていない場合は選択
         if index not in self.selected_indices:
             self.selected_indices = [index]
-            for widget in self.thumbnail_widgets:
-                widget.set_selected(widget.index in self.selected_indices)
+            for i, widget in enumerate(self.thumbnail_widgets):
+                is_selected = widget.index in self.selected_indices
+                widget.set_selected(is_selected)
+                # ImageModel.selectedも同期
+                if i < len(self.images):
+                    self.images[i].selected = is_selected
 
     def _on_drop_received(self, from_index: int, to_index: int):
-        """ドロップ受信時"""
+        """ドロップ受信時（単一）"""
         if from_index != to_index:
             self.order_changed.emit(from_index, to_index)
+
+    def _on_drop_received_multiple(self, from_indices: list[int], to_index: int):
+        """ドロップ受信時（複数）"""
+        self.order_changed_multiple.emit(from_indices, to_index)
 
     def keyPressEvent(self, event):
         """キーボードイベント"""
@@ -309,14 +327,16 @@ class ThumbnailWidget(QWidget):
     preview_requested = pyqtSignal(int)  # 虫眼鏡クリックシグナル
     drag_started = pyqtSignal(int)
     drop_received = pyqtSignal(int, int)  # (from_index, to_index)
+    drop_received_multiple = pyqtSignal(list, int)  # (from_indices, to_index) - 複数選択時
 
-    def __init__(self, image: ImageModel, index: int, parent=None, thumbnail_size: int = 200):
+    def __init__(self, image: ImageModel, index: int, parent=None, thumbnail_size: int = 200, preview_area=None):
         super().__init__(parent)
         self.image = image
         self.index = index
         self.drag_start_position = None
         self.is_selected = False
         self.thumbnail_size = thumbnail_size
+        self.preview_area = preview_area  # PreviewAreaへの参照を保持
 
         # 元のサムネイル（初回読み込み時のもの）を保持
         self.original_thumbnail = image.thumbnail
@@ -453,6 +473,10 @@ class ThumbnailWidget(QWidget):
         self.is_selected = selected
         self.update_style()
 
+    def set_preview_area(self, preview_area):
+        """PreviewArea参照を設定（遅延バインディング）"""
+        self.preview_area = preview_area
+
     def update_thumbnail_size(self, size: int):
         """サムネイルサイズを変更（超高速：Qt側でリサイズ）"""
         self.thumbnail_size = size
@@ -496,7 +520,21 @@ class ThumbnailWidget(QWidget):
 
         drag = QDrag(self)
         mime_data = QMimeData()
-        mime_data.setText(str(self.index))
+
+        # 複数選択されている場合は選択されたインデックスをすべて渡す
+        if not hasattr(self, 'preview_area') or self.preview_area is None:
+            # 防御的プログラミング: preview_area未設定時は単一ドラッグにフォールバック
+            mime_data.setText(str(self.index))
+        else:
+            selected_indices = [i for i, img in enumerate(self.preview_area.images) if img.selected]
+            if len(selected_indices) > 1 and self.index in selected_indices:
+                # 複数選択されており、ドラッグ元も選択されている
+                indices_str = ",".join(map(str, selected_indices))
+                mime_data.setText(indices_str)
+            else:
+                # 単一のドラッグ
+                mime_data.setText(str(self.index))
+
         drag.setMimeData(mime_data)
 
         # ドラッグ時のプレビュー画像
@@ -538,7 +576,15 @@ class ThumbnailWidget(QWidget):
     def dropEvent(self, event):
         """ドロップ時"""
         if event.mimeData().hasText():
-            from_index = int(event.mimeData().text())
+            text = event.mimeData().text()
             to_index = self.index
-            self.drop_received.emit(from_index, to_index)
+
+            # カンマ区切りの場合は複数選択
+            if "," in text:
+                from_indices = [int(idx) for idx in text.split(",")]
+                self.drop_received_multiple.emit(from_indices, to_index)
+            else:
+                from_index = int(text)
+                self.drop_received.emit(from_index, to_index)
+
             event.acceptProposedAction()
