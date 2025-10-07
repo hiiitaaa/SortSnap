@@ -760,6 +760,42 @@ python main.py
 
 ---
 
+### 2025-10-07 (9): 削除確認スキップ機能（Phase 7追加機能）
+
+#### 実装内容
+
+**削除確認ダイアログに「次回以降は確認しない」チェックボックスを追加**
+
+1. **ConfigModelに設定を追加**
+   - `show_delete_confirmation`: 削除確認ダイアログを表示するか（デフォルト: True）
+   - 設定は `config.json` に永続化
+   - `src/models/config_model.py:22`
+
+2. **削除確認ダイアログにチェックボックス追加**
+   - QMessageBox.setCheckBox() で「次回以降は確認しない」を表示
+   - チェックがONの場合、`config.json`に設定を保存
+   - 次回削除時は確認をスキップして即座に削除
+   - `src/views/main_window.py:300-334`
+
+3. **分岐処理**
+   - `show_delete_confirmation = False` の場合、確認ダイアログをスキップ
+   - `show_delete_confirmation = True` の場合、従来通りダイアログ表示
+
+#### UI/UX改善
+
+- ユーザーが明示的に選択可能
+- 一度設定すれば次回以降は自動適用
+- 設定は永続化されアプリ再起動後も有効
+- いつでも `config.json` を編集して変更可能
+
+#### 動作確認
+
+- 削除時に「次回以降は確認しない」をチェック → 次回から確認スキップ ✅
+- config.jsonに `"show_delete_confirmation": false` が保存される ✅
+- アプリ再起動後も設定が維持される ✅
+
+---
+
 ## 参考資料
 
 - 要件定義書: `SortSnap_要件定義書_v2.0.md`
