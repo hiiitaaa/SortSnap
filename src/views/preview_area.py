@@ -112,12 +112,11 @@ class PreviewArea(QWidget):
         cols = max(1, self.width() // (self.thumbnail_size + 20))
 
         for i, image in enumerate(images):
-            # サムネイル生成
-            if not image.thumbnail:
-                image.load_thumbnail(self.thumbnail_size)
+            # サムネイル生成（常に現在のサイズで再生成）
+            image.load_thumbnail(self.thumbnail_size)
 
             # サムネイルウィジェット作成
-            thumbnail_widget = ThumbnailWidget(image, i, self)
+            thumbnail_widget = ThumbnailWidget(image, i, self, self.thumbnail_size)
             thumbnail_widget.clicked.connect(self._on_thumbnail_clicked)
             thumbnail_widget.double_clicked.connect(self._on_thumbnail_double_clicked)
             thumbnail_widget.preview_requested.connect(self._on_preview_requested)
@@ -166,10 +165,26 @@ class PreviewArea(QWidget):
         from src.utils.constants import MIN_THUMBNAIL_SIZE, MAX_THUMBNAIL_SIZE
 
         size = max(MIN_THUMBNAIL_SIZE, min(MAX_THUMBNAIL_SIZE, size))
+        if self.thumbnail_size == size:
+            return  # サイズ変更なし
+
         self.thumbnail_size = size
 
-        # 再描画
-        self.load_images(self.images)
+        # ウィジェットが既に存在する場合は更新のみ（再作成しない）
+        if self.thumbnail_widgets:
+            self._update_existing_thumbnails(size)
+        else:
+            # 初回は通常の読み込み
+            self.load_images(self.images)
+
+    def _update_existing_thumbnails(self, size: int):
+        """既存のサムネイルウィジェットを更新（高速）"""
+        for widget in self.thumbnail_widgets:
+            # サムネイル再生成（キャッシュ利用）
+            widget.image.load_thumbnail(size)
+
+            # ウィジェットのサムネイル更新
+            widget.update_thumbnail(size)
 
     def zoom_in(self):
         """拡大"""
@@ -274,12 +289,13 @@ class ThumbnailWidget(QWidget):
     drag_started = pyqtSignal(int)
     drop_received = pyqtSignal(int, int)  # (from_index, to_index)
 
-    def __init__(self, image: ImageModel, index: int, parent=None):
+    def __init__(self, image: ImageModel, index: int, parent=None, thumbnail_size: int = 200):
         super().__init__(parent)
         self.image = image
         self.index = index
         self.drag_start_position = None
         self.is_selected = False
+        self.thumbnail_size = thumbnail_size
 
         # ダブルクリック検出用
         self.click_timer = QTimer()
@@ -295,7 +311,9 @@ class ThumbnailWidget(QWidget):
 
         # サムネイル画像エリア（虫眼鏡ボタンを含む）
         self.thumbnail_container = QWidget()
-        self.thumbnail_container.setFixedSize(image.thumbnail.size() if image.thumbnail else QSize(200, 200))
+        # サムネイルサイズに基づいてコンテナサイズを設定
+        container_size = image.thumbnail.size() if image.thumbnail else QSize(thumbnail_size, thumbnail_size)
+        self.thumbnail_container.setFixedSize(container_size)
 
         # 画像ラベル
         self.thumbnail_label = QLabel(self.thumbnail_container)
@@ -323,11 +341,8 @@ class ThumbnailWidget(QWidget):
             }
         """)
 
-        # 虫眼鏡ボタンを右下に配置
-        btn_margin = 5
-        btn_x = self.thumbnail_container.width() - self.magnifier_btn.width() - btn_margin
-        btn_y = self.thumbnail_container.height() - self.magnifier_btn.height() - btn_margin
-        self.magnifier_btn.move(btn_x, btn_y)
+        # 虫眼鏡ボタンを右下に配置（コンテナサイズに基づく）
+        self._update_magnifier_position()
 
         # ホバー時にプレビュー表示
         self.magnifier_btn.enterEvent = lambda e: self._on_magnifier_hover_enter()
@@ -358,6 +373,13 @@ class ThumbnailWidget(QWidget):
 
         # デフォルトスタイル
         self.update_style()
+
+    def _update_magnifier_position(self):
+        """虫眼鏡ボタンの位置を更新"""
+        btn_margin = 5
+        btn_x = self.thumbnail_container.width() - self.magnifier_btn.width() - btn_margin
+        btn_y = self.thumbnail_container.height() - self.magnifier_btn.height() - btn_margin
+        self.magnifier_btn.move(btn_x, btn_y)
 
     def _on_magnifier_hover_enter(self):
         """虫眼鏡ホバー開始"""
@@ -406,6 +428,20 @@ class ThumbnailWidget(QWidget):
         """選択状態を設定"""
         self.is_selected = selected
         self.update_style()
+
+    def update_thumbnail(self, size: int):
+        """サムネイル画像を更新（ウィジェット再作成なし）"""
+        self.thumbnail_size = size
+
+        # 画像とコンテナのサイズ更新
+        if self.image.thumbnail:
+            new_size = self.image.thumbnail.size()
+            self.thumbnail_container.setFixedSize(new_size)
+            self.thumbnail_label.setPixmap(self.image.thumbnail)
+            self.thumbnail_label.setFixedSize(new_size)
+
+            # 虫眼鏡ボタンの位置を更新
+            self._update_magnifier_position()
 
     def mouseMoveEvent(self, event):
         """マウス移動時（ドラッグ）"""

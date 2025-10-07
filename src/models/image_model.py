@@ -18,6 +18,9 @@ class ImageModel:
         self.index: int = 0
         self.selected: bool = False
 
+        # サムネイルキャッシュ（サイズごとに保存）
+        self._thumbnail_cache: dict[int, QPixmap] = {}
+
         # ファイル情報を取得
         self._load_file_info()
 
@@ -36,7 +39,7 @@ class ImageModel:
 
     def load_thumbnail(self, size: int = 200) -> bool:
         """
-        サムネイルを生成
+        サムネイルを生成（キャッシュ対応）
 
         Args:
             size: サムネイルのサイズ
@@ -44,6 +47,11 @@ class ImageModel:
         Returns:
             成功したかどうか
         """
+        # キャッシュ確認
+        if size in self._thumbnail_cache:
+            self.thumbnail = self._thumbnail_cache[size]
+            return True
+
         try:
             # Pillowでリサイズ（高速）
             with Image.open(self.file_path) as img:
@@ -58,12 +66,16 @@ class ImageModel:
                     img = img.convert('RGB')
 
                 # サムネイル生成（アスペクト比維持）
-                img.thumbnail((size, size), Image.Resampling.LANCZOS)
+                # BILINEAR: LANCZOS より高速で十分な品質
+                img.thumbnail((size, size), Image.Resampling.BILINEAR)
 
                 # PIL Image → QPixmap
                 img_bytes = img.tobytes('raw', 'RGB')
                 qimage = QImage(img_bytes, img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
                 self.thumbnail = QPixmap.fromImage(qimage)
+
+                # キャッシュに保存
+                self._thumbnail_cache[size] = self.thumbnail
 
             return True
 
@@ -94,6 +106,22 @@ class ImageModel:
         filename = template.replace("{number}", number_str).replace("{ext}", extension)
 
         return filename
+
+    def clear_thumbnail_cache(self, keep_size: int = None):
+        """
+        サムネイルキャッシュをクリア
+
+        Args:
+            keep_size: 保持するサイズ（Noneの場合は全削除）
+        """
+        if keep_size is None:
+            self._thumbnail_cache.clear()
+        else:
+            # 指定サイズ以外を削除
+            self._thumbnail_cache = {
+                size: pixmap for size, pixmap in self._thumbnail_cache.items()
+                if size == keep_size
+            }
 
     def get_file_size_str(self) -> str:
         """
